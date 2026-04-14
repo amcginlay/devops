@@ -1,4 +1,4 @@
-# kind Platform Bootstrap
+# kind-maker
 
 This workspace bootstraps a control-plane-only `kind` cluster with:
 
