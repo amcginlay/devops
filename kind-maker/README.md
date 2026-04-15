@@ -24,6 +24,10 @@ Optional extras:
 - `make kind-expose-grafana`
 - `make kind-print-grafana-access`
 - `make kind-print-grafana-admin-password`
+- `make kind-expose-alertmanager`
+- `make kind-print-alertmanager-access`
+- `make kind-expose-prometheus`
+- `make kind-print-prometheus-access`
 - `make kind-install-observability`
 - `make kind-install-argocd`
 - `make kind-install-cert-manager-issuer`
@@ -63,6 +67,10 @@ After cluster creation, the bootstrap writes a `hosts.toml` entry into the kind 
 - `make kind-expose-grafana` creates an `HTTPRoute` for `https://grafana.local` through the shared Gateway.
 - `make kind-print-grafana-access` prints the `/etc/hosts` entry and current practical Grafana URL based on the mapped `kindccm` proxy port.
 - `make kind-print-grafana-admin-password` prints the current Grafana admin password from the generated Kubernetes secret.
+- `make kind-expose-alertmanager` creates an `HTTPRoute` for `https://alertmanager.local` through the shared Gateway.
+- `make kind-print-alertmanager-access` prints the `/etc/hosts` entry and current practical Alertmanager URL based on the mapped `kindccm` proxy port.
+- `make kind-expose-prometheus` creates an `HTTPRoute` for `https://prometheus.local` through the shared Gateway.
+- `make kind-print-prometheus-access` prints the `/etc/hosts` entry and current practical Prometheus URL based on the mapped `kindccm` proxy port.
 - If cluster creation fails before bootstrap, use `make kind-create-debug` so the failed node is retained for inspection.
 - `make kind-sync-state` clears stale workspace state if a cluster was deleted out of band.
 
@@ -71,6 +79,8 @@ After cluster creation, the bootstrap writes a `hosts.toml` entry into the kind 
 - Run `make kind-preflight` before a fresh bootstrap if you want a quick check of tools, Docker, registry, and local state.
 - After `make kind-expose-grafana`, add `127.0.0.1 grafana.local` to `/etc/hosts`, then inspect the mapped gateway proxy port with `docker ps --format 'table {{.Names}}\t{{.Ports}}' --filter name=kindccm-`.
 - On Docker Desktop, the shared Gateway is typically reachable through that mapped host port, so the practical URL is usually `https://grafana.local:<mapped-port>`.
+- Because Grafana, Prometheus, and Alertmanager share one Gateway, exposing or reapplying one route can change the mapped host port for all of them.
+- If a printed access URL stops working after another exposure target runs, refresh it with `make kind-status` or the matching `make kind-print-*-access` target.
 - The shared Gateway uses a self-signed wildcard `*.local` certificate by default, so browsers will warn until you trust the issuing CA or switch to a different issuer flow.
 - If cluster creation fails early, run `make kind-create-debug` so the failed node is retained for inspection.
 - If the tracked cluster was removed outside the Makefile, run `make kind-sync-state`.

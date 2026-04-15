@@ -13,8 +13,10 @@ KIND_CLUSTER_CONFIG_TEMPLATE := kind/cluster.yaml.tpl
 KIND_CLUSTER_CONFIG := $(STATE_DIR)/kind-cluster.yaml
 GATEWAY_API_CERTIFICATE_MANIFEST := kind/gateway-api-certificate.yaml
 GATEWAY_API_GATEWAY_MANIFEST := kind/gateway-api-gateway.yaml
+ALERTMANAGER_HTTPROUTE_MANIFEST := kind/alertmanager-httproute.yaml
 GRAFANA_HTTPROUTE_MANIFEST := kind/grafana-httproute.yaml
 LOCAL_SELF_SIGNED_CLUSTER_ISSUER_MANIFEST := kind/local-self-signed-clusterissuer.yaml
+PROMETHEUS_HTTPROUTE_MANIFEST := kind/prometheus-httproute.yaml
 REGISTRY_NAME ?= kind-registry
 REGISTRY_PORT ?= 5001
 REGISTRY_CONTAINER_PORT ?= 5000
@@ -45,8 +47,18 @@ GRAFANA_ROUTE_NAME ?= grafana
 GRAFANA_SERVICE_NAME ?= kube-prometheus-stack-grafana
 GRAFANA_ADMIN_SECRET_NAME ?= kube-prometheus-stack-grafana
 GRAFANA_HOSTS_ADDRESS ?= 127.0.0.1
+ALERTMANAGER_HOSTNAME ?= alertmanager.local
+ALERTMANAGER_ROUTE_NAME ?= alertmanager
+ALERTMANAGER_SERVICE_NAME ?= kube-prometheus-stack-alertmanager
+ALERTMANAGER_SERVICE_PORT ?= 9093
+ALERTMANAGER_HOSTS_ADDRESS ?= 127.0.0.1
+PROMETHEUS_HOSTNAME ?= prometheus.local
+PROMETHEUS_ROUTE_NAME ?= prometheus
+PROMETHEUS_SERVICE_NAME ?= kube-prometheus-stack-prometheus
+PROMETHEUS_SERVICE_PORT ?= 9090
+PROMETHEUS_HOSTS_ADDRESS ?= 127.0.0.1
 
-.PHONY: help tools-check tools-install tools-install-argocd registry-start registry-stop registry-status kind-sync-state kind-export-kubeconfig kind-shell-env kind-print-grafana-access kind-print-grafana-admin-password kind-preflight kind-render-config kind-create kind-create-debug kind-delete kind-reset kind-bootstrap-base kind-bootstrap-full kind-install-base kind-install-gateway-api kind-install-gateway-api-gateway kind-expose-grafana kind-install-storage kind-install-cert-manager kind-install-cert-manager-issuer kind-install-metrics-server kind-install-observability kind-install-argocd kind-start-cloud-provider kind-check-cloud-provider kind-stop-cloud-provider kind-untaint-control-plane kind-configure-local-registry kind-status
+.PHONY: help tools-check tools-install tools-install-argocd registry-start registry-stop registry-status kind-sync-state kind-export-kubeconfig kind-shell-env kind-print-grafana-access kind-print-grafana-admin-password kind-print-alertmanager-access kind-print-prometheus-access kind-preflight kind-render-config kind-create kind-create-debug kind-delete kind-reset kind-bootstrap-base kind-bootstrap-full kind-install-base kind-install-gateway-api kind-install-gateway-api-gateway kind-expose-grafana kind-expose-alertmanager kind-expose-prometheus kind-install-storage kind-install-cert-manager kind-install-cert-manager-issuer kind-install-metrics-server kind-install-observability kind-install-argocd kind-start-cloud-provider kind-check-cloud-provider kind-stop-cloud-provider kind-untaint-control-plane kind-configure-local-registry kind-status
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = ":.*## "; dollar = sprintf("%c", 36); printf "Available targets:\n" } /^[a-zA-Z0-9_.-]+:.*## / { desc = $$2; while ((pos = index(desc, dollar dollar)) > 0) desc = substr(desc, 1, pos - 1) dollar substr(desc, pos + 2); targets[++count] = $$1; descriptions[count] = desc; if (length($$1) > width) width = length($$1) } END { for (i = 1; i <= count; i++) printf "  make %-" width "s  %s\n", targets[i], descriptions[i] }' $(MAKEFILE_LIST)
@@ -146,6 +158,30 @@ kind-print-grafana-access: kind-export-kubeconfig ## Print the current Grafana h
 kind-print-grafana-admin-password: ## Print the Grafana admin password from the current secret
 	@$(MAKE) kind-export-kubeconfig >/dev/null
 	@kubectl get secret --namespace "$(MONITORING_NAMESPACE)" "$(GRAFANA_ADMIN_SECRET_NAME)" -o jsonpath='{.data.admin-password}' | base64 --decode; printf '\n'
+
+kind-print-alertmanager-access: kind-export-kubeconfig ## Print the current Alertmanager hosts entry and practical URL
+	@mapped_port="$$(docker ps --format '{{.Ports}}' --filter "name=kindccm-" | sed -n 's/.*0\.0\.0\.0:\([0-9][0-9]*\)->443\/tcp.*/\1/p' | head -n 1)"; \
+	if [ -z "$$mapped_port" ]; then \
+		mapped_port="$$(docker ps --format '{{.Ports}}' --filter "name=kindccm-" | sed -n 's/.*\[\:\:\]:\([0-9][0-9]*\)->443\/tcp.*/\1/p' | head -n 1)"; \
+	fi; \
+	printf 'Hosts entry: %s %s\n' "$(ALERTMANAGER_HOSTS_ADDRESS)" "$(ALERTMANAGER_HOSTNAME)"; \
+	if [ -n "$$mapped_port" ]; then \
+		printf 'Alertmanager URL: https://%s:%s\n' "$(ALERTMANAGER_HOSTNAME)" "$$mapped_port"; \
+	else \
+		printf 'Alertmanager URL: <mapped gateway port not found; inspect docker ps --filter name=kindccm- >\n'; \
+	fi
+
+kind-print-prometheus-access: kind-export-kubeconfig ## Print the current Prometheus hosts entry and practical URL
+	@mapped_port="$$(docker ps --format '{{.Ports}}' --filter "name=kindccm-" | sed -n 's/.*0\.0\.0\.0:\([0-9][0-9]*\)->443\/tcp.*/\1/p' | head -n 1)"; \
+	if [ -z "$$mapped_port" ]; then \
+		mapped_port="$$(docker ps --format '{{.Ports}}' --filter "name=kindccm-" | sed -n 's/.*\[\:\:\]:\([0-9][0-9]*\)->443\/tcp.*/\1/p' | head -n 1)"; \
+	fi; \
+	printf 'Hosts entry: %s %s\n' "$(PROMETHEUS_HOSTS_ADDRESS)" "$(PROMETHEUS_HOSTNAME)"; \
+	if [ -n "$$mapped_port" ]; then \
+		printf 'Prometheus URL: https://%s:%s\n' "$(PROMETHEUS_HOSTNAME)" "$$mapped_port"; \
+	else \
+		printf 'Prometheus URL: <mapped gateway port not found; inspect docker ps --filter name=kindccm- >\n'; \
+	fi
 
 kind-preflight: tools-check kind-sync-state registry-start ## Check tools, Docker, state, registry, and shared services
 	@docker info >/dev/null
@@ -328,6 +364,38 @@ kind-expose-grafana: kind-export-kubeconfig kind-install-observability kind-inst
 	@printf '\nGrafana access:\n'
 	@$(MAKE) kind-print-grafana-access
 
+kind-expose-alertmanager: kind-export-kubeconfig kind-install-observability kind-install-gateway-api-gateway ## Expose Alertmanager through the shared HTTPS Gateway
+	@printf 'Installing Alertmanager HTTPRoute %s for host %s\n' "$(ALERTMANAGER_ROUTE_NAME)" "$(ALERTMANAGER_HOSTNAME)"
+	@sed \
+		-e 's|__MONITORING_NAMESPACE__|$(MONITORING_NAMESPACE)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_NAMESPACE__|$(GATEWAY_API_GATEWAY_NAMESPACE)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_NAME__|$(GATEWAY_API_GATEWAY_NAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_LISTENER_NAME__|$(GATEWAY_API_GATEWAY_LISTENER_NAME)|g' \
+		-e 's|__ALERTMANAGER_ROUTE_NAME__|$(ALERTMANAGER_ROUTE_NAME)|g' \
+		-e 's|__ALERTMANAGER_HOSTNAME__|$(ALERTMANAGER_HOSTNAME)|g' \
+		-e 's|__ALERTMANAGER_SERVICE_NAME__|$(ALERTMANAGER_SERVICE_NAME)|g' \
+		-e 's|__ALERTMANAGER_SERVICE_PORT__|$(ALERTMANAGER_SERVICE_PORT)|g' \
+		"$(ALERTMANAGER_HTTPROUTE_MANIFEST)" | kubectl apply -f -
+	@kubectl wait --namespace "$(MONITORING_NAMESPACE)" --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=180s httproute/"$(ALERTMANAGER_ROUTE_NAME)"
+	@printf '\nAlertmanager access:\n'
+	@$(MAKE) kind-print-alertmanager-access
+
+kind-expose-prometheus: kind-export-kubeconfig kind-install-observability kind-install-gateway-api-gateway ## Expose Prometheus through the shared HTTPS Gateway
+	@printf 'Installing Prometheus HTTPRoute %s for host %s\n' "$(PROMETHEUS_ROUTE_NAME)" "$(PROMETHEUS_HOSTNAME)"
+	@sed \
+		-e 's|__MONITORING_NAMESPACE__|$(MONITORING_NAMESPACE)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_NAMESPACE__|$(GATEWAY_API_GATEWAY_NAMESPACE)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_NAME__|$(GATEWAY_API_GATEWAY_NAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_LISTENER_NAME__|$(GATEWAY_API_GATEWAY_LISTENER_NAME)|g' \
+		-e 's|__PROMETHEUS_ROUTE_NAME__|$(PROMETHEUS_ROUTE_NAME)|g' \
+		-e 's|__PROMETHEUS_HOSTNAME__|$(PROMETHEUS_HOSTNAME)|g' \
+		-e 's|__PROMETHEUS_SERVICE_NAME__|$(PROMETHEUS_SERVICE_NAME)|g' \
+		-e 's|__PROMETHEUS_SERVICE_PORT__|$(PROMETHEUS_SERVICE_PORT)|g' \
+		"$(PROMETHEUS_HTTPROUTE_MANIFEST)" | kubectl apply -f -
+	@kubectl wait --namespace "$(MONITORING_NAMESPACE)" --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=180s httproute/"$(PROMETHEUS_ROUTE_NAME)"
+	@printf '\nPrometheus access:\n'
+	@$(MAKE) kind-print-prometheus-access
+
 kind-install-storage: ## Install local-path-provisioner and make it the default storage class
 	@printf 'Installing local-path-provisioner %s\n' "$(LOCAL_PATH_PROVISIONER_VERSION)"
 	@kubectl apply -f "https://raw.githubusercontent.com/rancher/local-path-provisioner/$(LOCAL_PATH_PROVISIONER_VERSION)/deploy/local-path-storage.yaml"
@@ -411,6 +479,24 @@ kind-status: kind-sync-state ## Show cluster and add-on status
 	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then kubectl get httproute -A 2>/dev/null || true; else printf '<no tracked cluster>\n'; fi
 	@printf '\nCertificates:\n'
 	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then kubectl get certificate -A 2>/dev/null || true; else printf '<no tracked cluster>\n'; fi
+	@printf '\nGateway access:\n'
+	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then \
+		mapped_port="$$(docker ps --format '{{.Ports}}' --filter "name=kindccm-" | sed -n 's/.*0\.0\.0\.0:\([0-9][0-9]*\)->443\/tcp.*/\1/p' | head -n 1)"; \
+		if [ -z "$$mapped_port" ]; then \
+			mapped_port="$$(docker ps --format '{{.Ports}}' --filter "name=kindccm-" | sed -n 's/.*\[\:\:\]:\([0-9][0-9]*\)->443\/tcp.*/\1/p' | head -n 1)"; \
+		fi; \
+		if [ -n "$$mapped_port" ]; then \
+			printf 'Gateway HTTPS host port: %s\n' "$$mapped_port"; \
+			kubectl get httproute -A -o jsonpath='{range .items[*]}{.spec.hostnames[0]}{"\n"}{end}' 2>/dev/null | while IFS= read -r hostname; do \
+				[ -n "$$hostname" ] || continue; \
+				printf 'https://%s:%s\n' "$$hostname" "$$mapped_port"; \
+			done; \
+		else \
+			printf '<mapped gateway port not found; inspect docker ps --filter name=kindccm->\n'; \
+		fi; \
+	else \
+		printf '<no tracked cluster>\n'; \
+	fi
 	@printf '\nCore add-ons:\n'
 	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then \
 		kubectl get pods -n "$(CERT_MANAGER_NAMESPACE)" 2>/dev/null || true; \
