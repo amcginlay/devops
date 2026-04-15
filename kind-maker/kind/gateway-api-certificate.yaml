@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: __GATEWAY_API_GATEWAY_CERTIFICATE_NAME__
+  namespace: __GATEWAY_API_GATEWAY_NAMESPACE__
+spec:
+  secretName: __GATEWAY_API_GATEWAY_TLS_SECRET_NAME__
+  issuerRef:
+    kind: ClusterIssuer
+    name: __LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME__
+  dnsNames:
+    - "__GATEWAY_API_GATEWAY_TLS_HOSTNAME__"

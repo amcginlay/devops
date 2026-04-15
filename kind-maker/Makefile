@@ -11,7 +11,9 @@ export KUBECONFIG := $(CURDIR)/$(CLOUD_KUBECONFIG_FILE)
 
 KIND_CLUSTER_CONFIG_TEMPLATE := kind/cluster.yaml.tpl
 KIND_CLUSTER_CONFIG := $(STATE_DIR)/kind-cluster.yaml
+GATEWAY_API_CERTIFICATE_MANIFEST := kind/gateway-api-certificate.yaml
 GATEWAY_API_GATEWAY_MANIFEST := kind/gateway-api-gateway.yaml
+GRAFANA_HTTPROUTE_MANIFEST := kind/grafana-httproute.yaml
 LOCAL_SELF_SIGNED_CLUSTER_ISSUER_MANIFEST := kind/local-self-signed-clusterissuer.yaml
 REGISTRY_NAME ?= kind-registry
 REGISTRY_PORT ?= 5001
@@ -33,9 +35,18 @@ ARGO_CD_NAMESPACE ?= argocd
 GATEWAY_API_GATEWAY_NAMESPACE ?= gateway-system
 GATEWAY_API_GATEWAY_NAME ?= shared
 GATEWAY_API_GATEWAY_CLASS_NAME ?= cloud-provider-kind
+GATEWAY_API_GATEWAY_LISTENER_NAME ?= https
+GATEWAY_API_GATEWAY_TLS_HOSTNAME ?= *.local
+GATEWAY_API_GATEWAY_TLS_SECRET_NAME ?= local-wildcard-tls
+GATEWAY_API_GATEWAY_CERTIFICATE_NAME ?= local-wildcard
 LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME ?= local-self-signed
+GRAFANA_HOSTNAME ?= grafana.local
+GRAFANA_ROUTE_NAME ?= grafana
+GRAFANA_SERVICE_NAME ?= kube-prometheus-stack-grafana
+GRAFANA_ADMIN_SECRET_NAME ?= kube-prometheus-stack-grafana
+GRAFANA_HOSTS_ADDRESS ?= 127.0.0.1
 
-.PHONY: help tools-check tools-install tools-install-argocd registry-start registry-stop registry-status kind-sync-state kind-export-kubeconfig kind-shell-env kind-preflight kind-render-config kind-create kind-create-debug kind-delete kind-reset kind-bootstrap-base kind-bootstrap-full kind-install-base kind-install-gateway-api kind-install-gateway-api-gateway kind-install-storage kind-install-cert-manager kind-install-cert-manager-issuer kind-install-metrics-server kind-install-observability kind-install-argocd kind-start-cloud-provider kind-check-cloud-provider kind-stop-cloud-provider kind-untaint-control-plane kind-configure-local-registry kind-status
+.PHONY: help tools-check tools-install tools-install-argocd registry-start registry-stop registry-status kind-sync-state kind-export-kubeconfig kind-shell-env kind-print-grafana-access kind-print-grafana-admin-password kind-preflight kind-render-config kind-create kind-create-debug kind-delete kind-reset kind-bootstrap-base kind-bootstrap-full kind-install-base kind-install-gateway-api kind-install-gateway-api-gateway kind-expose-grafana kind-install-storage kind-install-cert-manager kind-install-cert-manager-issuer kind-install-metrics-server kind-install-observability kind-install-argocd kind-start-cloud-provider kind-check-cloud-provider kind-stop-cloud-provider kind-untaint-control-plane kind-configure-local-registry kind-status
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = ":.*## "; dollar = sprintf("%c", 36); printf "Available targets:\n" } /^[a-zA-Z0-9_.-]+:.*## / { desc = $$2; while ((pos = index(desc, dollar dollar)) > 0) desc = substr(desc, 1, pos - 1) dollar substr(desc, pos + 2); targets[++count] = $$1; descriptions[count] = desc; if (length($$1) > width) width = length($$1) } END { for (i = 1; i <= count; i++) printf "  make %-" width "s  %s\n", targets[i], descriptions[i] }' $(MAKEFILE_LIST)
@@ -119,6 +130,22 @@ kind-export-kubeconfig: kind-sync-state ## Refresh the workspace kubeconfig for 
 kind-shell-env: ## Print shell exports for direct kubectl and helm use via eval "$$(make kind-shell-env)"
 	@$(MAKE) kind-export-kubeconfig >/dev/null
 	@printf 'export KUBECONFIG=%s\n' "$(KUBECONFIG)"
+
+kind-print-grafana-access: kind-export-kubeconfig ## Print the current Grafana hosts entry and practical URL
+	@mapped_port="$$(docker ps --format '{{.Ports}}' --filter "name=kindccm-" | sed -n 's/.*0\.0\.0\.0:\([0-9][0-9]*\)->443\/tcp.*/\1/p' | head -n 1)"; \
+	if [ -z "$$mapped_port" ]; then \
+		mapped_port="$$(docker ps --format '{{.Ports}}' --filter "name=kindccm-" | sed -n 's/.*\[\:\:\]:\([0-9][0-9]*\)->443\/tcp.*/\1/p' | head -n 1)"; \
+	fi; \
+	printf 'Hosts entry: %s %s\n' "$(GRAFANA_HOSTS_ADDRESS)" "$(GRAFANA_HOSTNAME)"; \
+	if [ -n "$$mapped_port" ]; then \
+		printf 'Grafana URL: https://%s:%s\n' "$(GRAFANA_HOSTNAME)" "$$mapped_port"; \
+	else \
+		printf 'Grafana URL: <mapped gateway port not found; inspect docker ps --filter name=kindccm- >\n'; \
+	fi
+
+kind-print-grafana-admin-password: ## Print the Grafana admin password from the current secret
+	@$(MAKE) kind-export-kubeconfig >/dev/null
+	@kubectl get secret --namespace "$(MONITORING_NAMESPACE)" "$(GRAFANA_ADMIN_SECRET_NAME)" -o jsonpath='{.data.admin-password}' | base64 --decode; printf '\n'
 
 kind-preflight: tools-check kind-sync-state registry-start ## Check tools, Docker, state, registry, and shared services
 	@docker info >/dev/null
@@ -260,15 +287,46 @@ kind-install-gateway-api: ## Install Gateway API CRDs
 	@kubectl wait --for=condition=Established --timeout=120s crd/gateways.gateway.networking.k8s.io
 	@kubectl wait --for=condition=Established --timeout=120s crd/httproutes.gateway.networking.k8s.io
 
-kind-install-gateway-api-gateway: kind-export-kubeconfig kind-start-cloud-provider kind-install-gateway-api ## Install a shared cluster Gateway resource for Gateway API routes
-	@printf 'Installing shared Gateway %s/%s with GatewayClass %s\n' "$(GATEWAY_API_GATEWAY_NAMESPACE)" "$(GATEWAY_API_GATEWAY_NAME)" "$(GATEWAY_API_GATEWAY_CLASS_NAME)"
+kind-install-gateway-api-gateway: kind-export-kubeconfig kind-start-cloud-provider kind-install-gateway-api kind-install-cert-manager-issuer ## Install a shared HTTPS Gateway resource and wildcard certificate for Gateway API routes
+	@printf 'Installing wildcard certificate %s/%s for %s\n' "$(GATEWAY_API_GATEWAY_NAMESPACE)" "$(GATEWAY_API_GATEWAY_CERTIFICATE_NAME)" "$(GATEWAY_API_GATEWAY_TLS_HOSTNAME)"
 	@kubectl create namespace "$(GATEWAY_API_GATEWAY_NAMESPACE)" --dry-run=client -o yaml | kubectl apply -f -
+	@sed \
+		-e 's|__GATEWAY_API_GATEWAY_NAMESPACE__|$(GATEWAY_API_GATEWAY_NAMESPACE)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_CERTIFICATE_NAME__|$(GATEWAY_API_GATEWAY_CERTIFICATE_NAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_TLS_SECRET_NAME__|$(GATEWAY_API_GATEWAY_TLS_SECRET_NAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_TLS_HOSTNAME__|$(GATEWAY_API_GATEWAY_TLS_HOSTNAME)|g' \
+		-e 's|__LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME__|$(LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME)|g' \
+		"$(GATEWAY_API_CERTIFICATE_MANIFEST)" | kubectl apply -f -
+	@kubectl wait --namespace "$(GATEWAY_API_GATEWAY_NAMESPACE)" --for=condition=Ready --timeout=180s certificate/"$(GATEWAY_API_GATEWAY_CERTIFICATE_NAME)"
+	@if kubectl get gateway --namespace "$(GATEWAY_API_GATEWAY_NAMESPACE)" "$(GATEWAY_API_GATEWAY_NAME)" >/dev/null 2>&1; then \
+		printf 'Recreating Gateway %s/%s to refresh listener and proxy state\n' "$(GATEWAY_API_GATEWAY_NAMESPACE)" "$(GATEWAY_API_GATEWAY_NAME)"; \
+		kubectl delete gateway --namespace "$(GATEWAY_API_GATEWAY_NAMESPACE)" "$(GATEWAY_API_GATEWAY_NAME)" --wait=true; \
+	fi
+	@printf 'Installing shared HTTPS Gateway %s/%s with GatewayClass %s\n' "$(GATEWAY_API_GATEWAY_NAMESPACE)" "$(GATEWAY_API_GATEWAY_NAME)" "$(GATEWAY_API_GATEWAY_CLASS_NAME)"
 	@sed \
 		-e 's|__GATEWAY_API_GATEWAY_NAMESPACE__|$(GATEWAY_API_GATEWAY_NAMESPACE)|g' \
 		-e 's|__GATEWAY_API_GATEWAY_NAME__|$(GATEWAY_API_GATEWAY_NAME)|g' \
 		-e 's|__GATEWAY_API_GATEWAY_CLASS_NAME__|$(GATEWAY_API_GATEWAY_CLASS_NAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_LISTENER_NAME__|$(GATEWAY_API_GATEWAY_LISTENER_NAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_TLS_HOSTNAME__|$(GATEWAY_API_GATEWAY_TLS_HOSTNAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_TLS_SECRET_NAME__|$(GATEWAY_API_GATEWAY_TLS_SECRET_NAME)|g' \
 		"$(GATEWAY_API_GATEWAY_MANIFEST)" | kubectl apply -f -
 	@kubectl wait --namespace "$(GATEWAY_API_GATEWAY_NAMESPACE)" --for=condition=Programmed --timeout=180s gateway/"$(GATEWAY_API_GATEWAY_NAME)"
+
+kind-expose-grafana: kind-export-kubeconfig kind-install-observability kind-install-gateway-api-gateway ## Expose Grafana through the shared HTTPS Gateway
+	@printf 'Installing Grafana HTTPRoute %s for host %s\n' "$(GRAFANA_ROUTE_NAME)" "$(GRAFANA_HOSTNAME)"
+	@sed \
+		-e 's|__MONITORING_NAMESPACE__|$(MONITORING_NAMESPACE)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_NAMESPACE__|$(GATEWAY_API_GATEWAY_NAMESPACE)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_NAME__|$(GATEWAY_API_GATEWAY_NAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_LISTENER_NAME__|$(GATEWAY_API_GATEWAY_LISTENER_NAME)|g' \
+		-e 's|__GRAFANA_ROUTE_NAME__|$(GRAFANA_ROUTE_NAME)|g' \
+		-e 's|__GRAFANA_HOSTNAME__|$(GRAFANA_HOSTNAME)|g' \
+		-e 's|__GRAFANA_SERVICE_NAME__|$(GRAFANA_SERVICE_NAME)|g' \
+		"$(GRAFANA_HTTPROUTE_MANIFEST)" | kubectl apply -f -
+	@kubectl wait --namespace "$(MONITORING_NAMESPACE)" --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=180s httproute/"$(GRAFANA_ROUTE_NAME)"
+	@printf '\nGrafana access:\n'
+	@$(MAKE) kind-print-grafana-access
 
 kind-install-storage: ## Install local-path-provisioner and make it the default storage class
 	@printf 'Installing local-path-provisioner %s\n' "$(LOCAL_PATH_PROVISIONER_VERSION)"
@@ -349,6 +407,10 @@ kind-status: kind-sync-state ## Show cluster and add-on status
 	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then kubectl get gatewayclass 2>/dev/null || true; else printf '<no tracked cluster>\n'; fi
 	@printf '\nGateways:\n'
 	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then kubectl get gateway -A 2>/dev/null || true; else printf '<no tracked cluster>\n'; fi
+	@printf '\nHTTPRoutes:\n'
+	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then kubectl get httproute -A 2>/dev/null || true; else printf '<no tracked cluster>\n'; fi
+	@printf '\nCertificates:\n'
+	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then kubectl get certificate -A 2>/dev/null || true; else printf '<no tracked cluster>\n'; fi
 	@printf '\nCore add-ons:\n'
 	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then \
 		kubectl get pods -n "$(CERT_MANAGER_NAMESPACE)" 2>/dev/null || true; \

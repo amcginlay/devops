@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## Purpose
 
@@ -15,7 +15,7 @@ The base platform includes:
 
 Optional extras:
 
-- an opt-in shared cluster `Gateway`
+- an opt-in shared HTTPS cluster `Gateway`
 - `kube-prometheus-stack`
 - Argo CD
 - an opt-in local self-signed `ClusterIssuer`
@@ -24,7 +24,7 @@ Optional extras:
 
 - Favor hyphens over underscores when naming new targets, helpers, and docs.
 - Keep the base bootstrap lean. Observability and GitOps stay optional unless explicitly requested otherwise.
-- Keep the shared Gateway separate from API installation. Installing Gateway API CRDs should not silently create the cluster Gateway resource.
+- Keep the shared Gateway separate from API installation. Installing Gateway API CRDs should not silently create the shared HTTPS Gateway resource or wildcard certificate.
 - Keep certificate issuer policy opt-in. Installing `cert-manager` should not silently create a default issuer.
 - Treat `cloud-provider-kind` as a shared host service. Do not make cluster deletion automatically shut it down.
 - Keep registry workflows host-side, not in-cluster, unless there is a deliberate reason to change that.
@@ -50,6 +50,7 @@ make kind-bootstrap-base
 make kind-install-gateway-api-gateway
 make kind-install-cert-manager-issuer
 make kind-install-observability
+make kind-expose-grafana
 make kind-install-argocd
 ```
 
