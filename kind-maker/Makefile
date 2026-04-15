@@ -11,6 +11,7 @@ export KUBECONFIG := $(CURDIR)/$(CLOUD_KUBECONFIG_FILE)
 
 KIND_CLUSTER_CONFIG_TEMPLATE := kind/cluster.yaml.tpl
 KIND_CLUSTER_CONFIG := $(STATE_DIR)/kind-cluster.yaml
+LOCAL_SELF_SIGNED_CLUSTER_ISSUER_MANIFEST := kind/local-self-signed-clusterissuer.yaml
 REGISTRY_NAME ?= kind-registry
 REGISTRY_PORT ?= 5001
 REGISTRY_CONTAINER_PORT ?= 5000
@@ -28,11 +29,12 @@ ARGO_CD_VERSION ?= v3.2.1
 CERT_MANAGER_NAMESPACE ?= cert-manager
 MONITORING_NAMESPACE ?= monitoring
 ARGO_CD_NAMESPACE ?= argocd
+LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME ?= local-self-signed
 
-.PHONY: help tools-check tools-install tools-install-argocd registry-start registry-stop registry-status kind-sync-state kind-export-kubeconfig kind-preflight kind-render-config kind-create kind-create-debug kind-delete kind-reset kind-bootstrap-base kind-bootstrap-full kind-install-base kind-install-gateway-api kind-install-storage kind-install-cert-manager kind-install-metrics-server kind-install-observability kind-install-argocd kind-start-cloud-provider kind-check-cloud-provider kind-stop-cloud-provider kind-untaint-control-plane kind-configure-local-registry kind-status
+.PHONY: help tools-check tools-install tools-install-argocd registry-start registry-stop registry-status kind-sync-state kind-export-kubeconfig kind-preflight kind-render-config kind-create kind-create-debug kind-delete kind-reset kind-bootstrap-base kind-bootstrap-full kind-install-base kind-install-gateway-api kind-install-storage kind-install-cert-manager kind-install-cert-manager-issuer kind-install-metrics-server kind-install-observability kind-install-argocd kind-start-cloud-provider kind-check-cloud-provider kind-stop-cloud-provider kind-untaint-control-plane kind-configure-local-registry kind-status
 
 help: ## Show available targets
-	@awk 'BEGIN {FS = ":.*## "; printf "Available targets:\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  make %-28s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "; printf "Available targets:\n"} /^[a-zA-Z0-9_.-]+:.*## / { targets[++count] = $$1; descriptions[count] = $$2; if (length($$1) > width) width = length($$1) } END { for (i = 1; i <= count; i++) printf "  make %-" width "s  %s\n", targets[i], descriptions[i] }' $(MAKEFILE_LIST)
 
 tools-check: ## Verify required client tools are installed
 	@for tool in docker kind kubectl helm k9s; do \
@@ -267,6 +269,12 @@ kind-install-cert-manager: ## Install cert-manager
 	@kubectl rollout status --namespace "$(CERT_MANAGER_NAMESPACE)" deployment/cert-manager --timeout=180s
 	@kubectl rollout status --namespace "$(CERT_MANAGER_NAMESPACE)" deployment/cert-manager-webhook --timeout=180s
 	@kubectl rollout status --namespace "$(CERT_MANAGER_NAMESPACE)" deployment/cert-manager-cainjector --timeout=180s
+
+kind-install-cert-manager-issuer: kind-export-kubeconfig ## Install an opt-in self-signed ClusterIssuer for cert-manager development flows
+	@printf 'Installing local self-signed ClusterIssuer %s\n' "$(LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME)"
+	@sed \
+		-e 's|__LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME__|$(LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME)|g' \
+		"$(LOCAL_SELF_SIGNED_CLUSTER_ISSUER_MANIFEST)" | kubectl apply -f -
 
 kind-install-metrics-server: ## Install metrics-server
 	@printf 'Installing metrics-server chart %s\n' "$(METRICS_SERVER_CHART_VERSION)"

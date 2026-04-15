@@ -17,11 +17,13 @@ Optional extras:
 
 - `kube-prometheus-stack`
 - Argo CD
+- an opt-in local self-signed `ClusterIssuer`
 
 ## Working rules
 
 - Favor hyphens over underscores when naming new targets, helpers, and docs.
 - Keep the base bootstrap lean. Observability and GitOps stay optional unless explicitly requested otherwise.
+- Keep certificate issuer policy opt-in. Installing `cert-manager` should not silently create a default issuer.
 - Treat `cloud-provider-kind` as a shared host service. Do not make cluster deletion automatically shut it down.
 - Keep registry workflows host-side, not in-cluster, unless there is a deliberate reason to change that.
 - Treat `k9s` as a core client tool, not an optional extra.
@@ -43,6 +45,7 @@ Typical sequence:
 make kind-preflight
 make tools-check
 make kind-bootstrap-base
+make kind-install-cert-manager-issuer
 make kind-install-observability
 make kind-install-argocd
 ```

@@ -1,0 +1,6 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: __LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME__
+spec:
+  selfSigned: {}
