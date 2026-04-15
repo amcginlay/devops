@@ -1,0 +1,14 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: __GATEWAY_API_GATEWAY_NAME__
+  namespace: __GATEWAY_API_GATEWAY_NAMESPACE__
+spec:
+  gatewayClassName: __GATEWAY_API_GATEWAY_CLASS_NAME__
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All

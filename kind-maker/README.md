@@ -11,6 +11,7 @@ This workspace bootstraps a control-plane-only `kind` cluster with:
 
 Optional extras:
 
+- an opt-in shared cluster `Gateway`
 - `kube-prometheus-stack`
 - Argo CD
 - an opt-in local self-signed `ClusterIssuer`
@@ -19,6 +20,7 @@ Optional extras:
 
 - `make kind-preflight`
 - `make kind-bootstrap-base`
+- `make kind-install-gateway-api-gateway`
 - `make kind-install-observability`
 - `make kind-install-argocd`
 - `make kind-install-cert-manager-issuer`
@@ -52,6 +54,8 @@ After cluster creation, the bootstrap writes a `hosts.toml` entry into the kind 
 - `make kind-delete` removes the cluster but does not stop the shared controller.
 - The effective `kind` config is rendered to `.state/kind-cluster.yaml`.
 - The workspace keeps its own kubeconfig at `.state/kubeconfig` instead of relying on your global `kubectl` context.
+- Run `eval "$(make kind-shell-env)"` if you want your interactive shell to point `kubectl` and `helm` at the workspace kubeconfig after cluster creation.
+- `make kind-install-gateway-api` installs Gateway API CRDs only; use `make kind-install-gateway-api-gateway` to create the shared cluster `Gateway` resource.
 - `cert-manager` is installed without a default issuer; use `make kind-install-cert-manager-issuer` if you want an opt-in self-signed `ClusterIssuer` named `local-self-signed`.
 - If cluster creation fails before bootstrap, use `make kind-create-debug` so the failed node is retained for inspection.
 - `make kind-sync-state` clears stale workspace state if a cluster was deleted out of band.

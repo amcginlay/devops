@@ -11,6 +11,7 @@ export KUBECONFIG := $(CURDIR)/$(CLOUD_KUBECONFIG_FILE)
 
 KIND_CLUSTER_CONFIG_TEMPLATE := kind/cluster.yaml.tpl
 KIND_CLUSTER_CONFIG := $(STATE_DIR)/kind-cluster.yaml
+GATEWAY_API_GATEWAY_MANIFEST := kind/gateway-api-gateway.yaml
 LOCAL_SELF_SIGNED_CLUSTER_ISSUER_MANIFEST := kind/local-self-signed-clusterissuer.yaml
 REGISTRY_NAME ?= kind-registry
 REGISTRY_PORT ?= 5001
@@ -29,12 +30,15 @@ ARGO_CD_VERSION ?= v3.2.1
 CERT_MANAGER_NAMESPACE ?= cert-manager
 MONITORING_NAMESPACE ?= monitoring
 ARGO_CD_NAMESPACE ?= argocd
+GATEWAY_API_GATEWAY_NAMESPACE ?= gateway-system
+GATEWAY_API_GATEWAY_NAME ?= shared
+GATEWAY_API_GATEWAY_CLASS_NAME ?= cloud-provider-kind
 LOCAL_SELF_SIGNED_CLUSTER_ISSUER_NAME ?= local-self-signed
 
-.PHONY: help tools-check tools-install tools-install-argocd registry-start registry-stop registry-status kind-sync-state kind-export-kubeconfig kind-preflight kind-render-config kind-create kind-create-debug kind-delete kind-reset kind-bootstrap-base kind-bootstrap-full kind-install-base kind-install-gateway-api kind-install-storage kind-install-cert-manager kind-install-cert-manager-issuer kind-install-metrics-server kind-install-observability kind-install-argocd kind-start-cloud-provider kind-check-cloud-provider kind-stop-cloud-provider kind-untaint-control-plane kind-configure-local-registry kind-status
+.PHONY: help tools-check tools-install tools-install-argocd registry-start registry-stop registry-status kind-sync-state kind-export-kubeconfig kind-shell-env kind-preflight kind-render-config kind-create kind-create-debug kind-delete kind-reset kind-bootstrap-base kind-bootstrap-full kind-install-base kind-install-gateway-api kind-install-gateway-api-gateway kind-install-storage kind-install-cert-manager kind-install-cert-manager-issuer kind-install-metrics-server kind-install-observability kind-install-argocd kind-start-cloud-provider kind-check-cloud-provider kind-stop-cloud-provider kind-untaint-control-plane kind-configure-local-registry kind-status
 
 help: ## Show available targets
-	@awk 'BEGIN {FS = ":.*## "; printf "Available targets:\n"} /^[a-zA-Z0-9_.-]+:.*## / { targets[++count] = $$1; descriptions[count] = $$2; if (length($$1) > width) width = length($$1) } END { for (i = 1; i <= count; i++) printf "  make %-" width "s  %s\n", targets[i], descriptions[i] }' $(MAKEFILE_LIST)
+	@awk 'BEGIN { FS = ":.*## "; dollar = sprintf("%c", 36); printf "Available targets:\n" } /^[a-zA-Z0-9_.-]+:.*## / { desc = $$2; while ((pos = index(desc, dollar dollar)) > 0) desc = substr(desc, 1, pos - 1) dollar substr(desc, pos + 2); targets[++count] = $$1; descriptions[count] = desc; if (length($$1) > width) width = length($$1) } END { for (i = 1; i <= count; i++) printf "  make %-" width "s  %s\n", targets[i], descriptions[i] }' $(MAKEFILE_LIST)
 
 tools-check: ## Verify required client tools are installed
 	@for tool in docker kind kubectl helm k9s; do \
@@ -109,8 +113,12 @@ kind-export-kubeconfig: kind-sync-state ## Refresh the workspace kubeconfig for 
 		printf 'Tracked cluster %s does not exist. Run make kind-sync-state or make kind-create.\n' "$$cluster_name" >&2; \
 		exit 1; \
 	}; \
-	kind export kubeconfig --name "$$cluster_name" --kubeconfig "$(KUBECONFIG)" >/dev/null; \
+	kind export kubeconfig --name "$$cluster_name" --kubeconfig "$(KUBECONFIG)" >/dev/null 2>&1; \
 	printf 'Exported kubeconfig for %s to %s\n' "$$cluster_name" "$(CLOUD_KUBECONFIG_FILE)"
+
+kind-shell-env: ## Print shell exports for direct kubectl and helm use via eval "$$(make kind-shell-env)"
+	@$(MAKE) kind-export-kubeconfig >/dev/null
+	@printf 'export KUBECONFIG=%s\n' "$(KUBECONFIG)"
 
 kind-preflight: tools-check kind-sync-state registry-start ## Check tools, Docker, state, registry, and shared services
 	@docker info >/dev/null
@@ -175,7 +183,7 @@ kind-bootstrap-base: kind-create kind-install-base ## Create the cluster and ins
 
 kind-bootstrap-full: kind-bootstrap-base kind-install-observability kind-install-argocd ## Bootstrap base + observability + Argo CD
 
-kind-install-base: kind-export-kubeconfig kind-untaint-control-plane kind-start-cloud-provider kind-install-gateway-api kind-install-storage kind-install-cert-manager kind-install-metrics-server ## Install gateway-api, storage, cert-manager, and metrics-server
+kind-install-base: kind-export-kubeconfig kind-untaint-control-plane kind-start-cloud-provider kind-install-gateway-api kind-install-storage kind-install-cert-manager kind-install-metrics-server ## Install Gateway API CRDs, storage, cert-manager, and metrics-server
 
 kind-configure-local-registry: ## Connect the local registry to the cluster and publish registry hosting info
 	@cluster_name="$${CLUSTER_NAME:-$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null)}"; \
@@ -251,6 +259,16 @@ kind-install-gateway-api: ## Install Gateway API CRDs
 	@kubectl wait --for=condition=Established --timeout=120s crd/gatewayclasses.gateway.networking.k8s.io
 	@kubectl wait --for=condition=Established --timeout=120s crd/gateways.gateway.networking.k8s.io
 	@kubectl wait --for=condition=Established --timeout=120s crd/httproutes.gateway.networking.k8s.io
+
+kind-install-gateway-api-gateway: kind-export-kubeconfig kind-start-cloud-provider kind-install-gateway-api ## Install a shared cluster Gateway resource for Gateway API routes
+	@printf 'Installing shared Gateway %s/%s with GatewayClass %s\n' "$(GATEWAY_API_GATEWAY_NAMESPACE)" "$(GATEWAY_API_GATEWAY_NAME)" "$(GATEWAY_API_GATEWAY_CLASS_NAME)"
+	@kubectl create namespace "$(GATEWAY_API_GATEWAY_NAMESPACE)" --dry-run=client -o yaml | kubectl apply -f -
+	@sed \
+		-e 's|__GATEWAY_API_GATEWAY_NAMESPACE__|$(GATEWAY_API_GATEWAY_NAMESPACE)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_NAME__|$(GATEWAY_API_GATEWAY_NAME)|g' \
+		-e 's|__GATEWAY_API_GATEWAY_CLASS_NAME__|$(GATEWAY_API_GATEWAY_CLASS_NAME)|g' \
+		"$(GATEWAY_API_GATEWAY_MANIFEST)" | kubectl apply -f -
+	@kubectl wait --namespace "$(GATEWAY_API_GATEWAY_NAMESPACE)" --for=condition=Programmed --timeout=180s gateway/"$(GATEWAY_API_GATEWAY_NAME)"
 
 kind-install-storage: ## Install local-path-provisioner and make it the default storage class
 	@printf 'Installing local-path-provisioner %s\n' "$(LOCAL_PATH_PROVISIONER_VERSION)"
@@ -329,6 +347,8 @@ kind-status: kind-sync-state ## Show cluster and add-on status
 	fi
 	@printf '\nGateway classes:\n'
 	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then kubectl get gatewayclass 2>/dev/null || true; else printf '<no tracked cluster>\n'; fi
+	@printf '\nGateways:\n'
+	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then kubectl get gateway -A 2>/dev/null || true; else printf '<no tracked cluster>\n'; fi
 	@printf '\nCore add-ons:\n'
 	@if [ -n "$$(cat "$(CLUSTER_NAME_FILE)" 2>/dev/null || true)" ]; then \
 		kubectl get pods -n "$(CERT_MANAGER_NAMESPACE)" 2>/dev/null || true; \
