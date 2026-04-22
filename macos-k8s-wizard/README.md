@@ -1,4 +1,4 @@
-# k8s-wizard
+# macos-k8s-wizard
 
 A self-contained local Kubernetes environment for macOS Apple Silicon. Spins up a kind cluster inside a Vagrant/Parallels VM with Gateway API, TLS, and cert-manager pre-configured.
 
@@ -8,7 +8,7 @@ A self-contained local Kubernetes environment for macOS Apple Silicon. Spins up 
 - **Kind cluster** (single control-plane node)
 - **Nginx Gateway Fabric** with HTTPS on port 443 (`*.vm.local`)
 - **cert-manager** with a self-signed ClusterIssuer
-- **Tools in the VM:** Docker, kubectl, helm, kind, k9s
+- **Host tools:** kubectl, helm, k9s installed via Homebrew
 - **Host access** to the cluster via exported kubeconfig and port forwarding
 
 ## Prerequisites
@@ -24,28 +24,18 @@ Run `make preflight` to verify your setup.
 ## Getting started
 
 ```bash
-# Install client tools on the host
-make install-client-tools
+# One command to create the VM, cluster, and install all platform components
+make cluster-up
 
-# Create the VM and provision the cluster
-make vm-up
-
-# Export the kubeconfig
-make get-kubeconfig
-export KUBECONFIG=$(pwd)/kubeconfig.yaml
-
-# Verify
+# Verify (KUBECONFIG is set automatically)
 kubectl get nodes
 ```
 
-## Managing the VM
+## Managing the cluster
 
 ```bash
-make vm-halt       # shut down
-make vm-suspend    # suspend to disk
-make vm-up         # resume
-make vm-provision  # re-run provisioning
-make vm-destroy    # destroy everything
+make cluster-down  # destroy the VM and everything in it
+make cluster-up    # recreate from scratch
 ```
 
 ## Deploying an app
@@ -76,7 +66,7 @@ Then add `127.0.0.1 my-app.vm.local` to `/etc/hosts` and visit `https://my-app.v
 ```
 .
 ├── Makefile                              # Host-side targets
-├── Vagrantfile                           # VM definition and provisioning
+├── Vagrantfile                           # VM definition (Docker + kind only)
 └── manifests/
     ├── kind-cluster.yaml                 # Kind cluster config
     ├── selfsigned-clusterissuer.yaml     # cert-manager ClusterIssuer

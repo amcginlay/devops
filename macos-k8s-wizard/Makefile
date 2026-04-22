@@ -1,4 +1,6 @@
-.PHONY: help preflight vm-up vm-provision vm-halt vm-suspend vm-destroy get-kubeconfig install-client-tools
+export KUBECONFIG := $(CURDIR)/kubeconfig.yaml
+
+.PHONY: help preflight cluster-up cluster-down get-kubeconfig install-client-tools install-platform
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = ":.*## "; dollar = sprintf("%c", 36); printf "Available targets:\n" } /^[a-zA-Z0-9_.-]+:.*## / { desc = $$2; while ((pos = index(desc, dollar dollar)) > 0) desc = substr(desc, 1, pos - 1) dollar substr(desc, pos + 2); targets[++count] = $$1; descriptions[count] = desc; if (length($$1) > width) width = length($$1) } END { for (i = 1; i <= count; i++) printf "  make %-" width "s  %s\n", targets[i], descriptions[i] }' $(MAKEFILE_LIST)
@@ -12,25 +14,29 @@ preflight: ## Verify system meets requirements (macOS, Apple Silicon, Parallels)
 	@command -v prlctl >/dev/null 2>&1 || { echo "FAIL: Parallels Desktop is not installed"; exit 1; }
 	@echo "All preflight checks passed."
 
-vm-up: preflight ## Provision and start the Vagrant VM
+cluster-up: preflight ## Start the Vagrant VM, create the cluster and provision a platform
 	vagrant up --provider=parallels
+	$(MAKE) install-platform
 
-vm-provision: ## Re-run VM provisioning (install/update tools)
-	vagrant provision
-
-vm-halt: ## Gracefully shut down the Vagrant VM
-	vagrant halt
-
-vm-suspend: ## Suspend the Vagrant VM to disk
-	vagrant suspend
-
-vm-destroy: ## Destroy the Vagrant VM and all its resources
+cluster-down: ## Destroy the Vagrant VM and all its resources
 	vagrant destroy -f
 
-get-kubeconfig: ## Downloads the kubeconfig from the VM for host access
+get-kubeconfig: ## Download the kubeconfig from the VM for host access
 	@vagrant ssh -c 'kind get kubeconfig --name k8s-wizard' 2>/dev/null | sed 's|https://0\.0\.0\.0:|https://127.0.0.1:|' > kubeconfig.yaml
 	@echo "Kubeconfig written to kubeconfig.yaml"
 	@echo "Usage: export KUBECONFIG=$$(pwd)/kubeconfig.yaml"
 
 install-client-tools: ## Install kubectl, helm and k9s on the host via Homebrew
 	brew install kubectl helm k9s
+
+install-platform: install-client-tools get-kubeconfig ## Install platform components (cert-manager, Gateway API, Nginx Gateway Fabric)
+	@echo "==> Installing cert-manager with self-signed cluster-wide issuer..."
+	helm repo add jetstack https://charts.jetstack.io --force-update
+	helm upgrade --install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --set crds.enabled=true --wait
+	kubectl apply -f manifests/selfsigned-clusterissuer.yaml
+	@echo "==> Installing Gateway API CRDs..."
+	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
+	@echo "==> Installing Nginx Gateway Fabric..."
+	helm upgrade --install nginx-gateway oci://ghcr.io/nginx/charts/nginx-gateway-fabric --namespace nginx-gateway --create-namespace --set service.type=NodePort --set "service.ports[0].nodePort=30443" --wait
+	@echo "==> Creating default Gateway with TLS..."
+	kubectl apply -f manifests/default-gateway.yaml
