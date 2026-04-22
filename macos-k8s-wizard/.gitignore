@@ -1,2 +1,3 @@
 kubeconfig.yaml
 .vagrant/
+.claude/settings.local.json

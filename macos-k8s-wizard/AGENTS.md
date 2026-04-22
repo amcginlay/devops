@@ -39,7 +39,8 @@ Run `make help` for the full list.
 | `cluster-up` | Create VM, kind cluster, and install platform |
 | `cluster-down` | Destroy the VM and all resources |
 | `get-kubeconfig` | Download kubeconfig for host access |
-| `install-platform` | Install cert-manager, Gateway API, Nginx Gateway Fabric |
+| `get-grafana-admin-password` | Print the Grafana admin password |
+| `install-platform` | Install cert-manager, Gateway API, Nginx Gateway Fabric, metrics-server, Prometheus stack |
 
 ## Key files
 
@@ -48,6 +49,9 @@ Run `make help` for the full list.
 - `manifests/kind-cluster.yaml` — Kind cluster config (API server binding, port mappings, cert SANs)
 - `manifests/selfsigned-clusterissuer.yaml` — cert-manager self-signed ClusterIssuer
 - `manifests/default-gateway.yaml` — Gateway resource with wildcard TLS for `*.vm.local`
+- `manifests/grafana-httproute.yaml` — HTTPRoute for Grafana (`grafana.vm.local`)
+- `manifests/prometheus-httproute.yaml` — HTTPRoute for Prometheus (`prometheus.vm.local`)
+- `manifests/alertmanager-httproute.yaml` — HTTPRoute for Alertmanager (`alertmanager.vm.local`)
 
 ## Conventions
 
