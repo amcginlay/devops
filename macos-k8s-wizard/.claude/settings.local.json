@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(make cluster-up:*)",
-      "Bash(make vm-up:*)"
-    ]
-  }
-}
