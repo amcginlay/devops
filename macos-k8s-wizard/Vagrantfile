@@ -1,3 +1,6 @@
+KIND_VERSION    = ENV.fetch("KIND_VERSION", "v0.31.0")
+KIND_NODE_IMAGE = ENV.fetch("KIND_NODE_IMAGE", "kindest/node:v1.35.0")
+
 Vagrant.configure("2") do |config|
   config.vm.box = "bento/ubuntu-24.04"
 
@@ -26,11 +29,11 @@ Vagrant.configure("2") do |config|
     usermod -aG docker vagrant
 
     echo "==> Installing kind..."
-    curl -fsSL https://kind.sigs.k8s.io/dl/latest/kind-linux-arm64 -o /tmp/kind
+    curl -fsSL https://kind.sigs.k8s.io/dl/#{KIND_VERSION}/kind-linux-arm64 -o /tmp/kind
     install -o root -g root -m 0755 /tmp/kind /usr/local/bin/kind
 
     echo "==> Creating kind cluster..."
-    su - vagrant -c 'kind get clusters' | grep -q '^k8s-wizard$' || su - vagrant -c 'kind create cluster --name k8s-wizard --config /vagrant/manifests/kind-cluster.yaml'
+    su - vagrant -c 'kind get clusters' | grep -q '^k8s-wizard$' || su - vagrant -c 'kind create cluster --name k8s-wizard --image #{KIND_NODE_IMAGE} --config /vagrant/manifests/kind-cluster.yaml'
     echo "==> kind cluster created."
   SHELL
 end

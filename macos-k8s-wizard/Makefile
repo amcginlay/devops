@@ -1,5 +1,14 @@
 export KUBECONFIG := $(CURDIR)/kubeconfig.yaml
 
+# Component versions
+KIND_VERSION          := v0.31.0
+KIND_NODE_IMAGE       := kindest/node:v1.35.0
+CERT_MANAGER_VERSION  := v1.20.2
+GATEWAY_API_VERSION   := v1.5.1
+NGF_VERSION           := 2.5.1
+METRICS_SERVER_VERSION := 3.13.0
+PROM_STACK_VERSION    := 83.7.0
+
 .PHONY: help preflight cluster-up cluster-down get-kubeconfig install-client-tools install-platform get-grafana-admin-password
 
 help: ## Show available targets
@@ -15,7 +24,7 @@ preflight: ## Verify system meets requirements (macOS, Apple Silicon, Parallels)
 	@echo "All preflight checks passed."
 
 cluster-up: preflight ## Start the VM, create the K8s cluster and provision a standard platform
-	vagrant up --provider=parallels
+	KIND_VERSION=$(KIND_VERSION) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) vagrant up --provider=parallels
 	$(MAKE) install-platform
 
 cluster-down: ## Destroy the VM and all its resources
@@ -35,20 +44,20 @@ get-grafana-admin-password: ## Print the Grafana admin password
 install-platform: install-client-tools get-kubeconfig ## Install platform components (cert-manager, Gateway API, Nginx Gateway Fabric, metrics-server, Prometheus stack)
 	@echo "==> Installing cert-manager with self-signed cluster-wide issuer..."
 	helm repo add jetstack https://charts.jetstack.io --force-update
-	helm upgrade --install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --set crds.enabled=true --wait
+	helm upgrade --install cert-manager jetstack/cert-manager --version $(CERT_MANAGER_VERSION) --namespace cert-manager --create-namespace --set crds.enabled=true --wait
 	kubectl apply -f manifests/selfsigned-clusterissuer.yaml
 	@echo "==> Installing Gateway API CRDs..."
-	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
+	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
 	@echo "==> Installing Nginx Gateway Fabric..."
-	helm upgrade --install nginx-gateway oci://ghcr.io/nginx/charts/nginx-gateway-fabric --namespace nginx-gateway --create-namespace --set nginx.service.type=NodePort --set "nginx.service.nodePorts[0].port=30443" --set "nginx.service.nodePorts[0].listenerPort=443" --wait
+	helm upgrade --install nginx-gateway oci://ghcr.io/nginx/charts/nginx-gateway-fabric --version $(NGF_VERSION) --namespace nginx-gateway --create-namespace --set nginx.service.type=NodePort --set "nginx.service.nodePorts[0].port=30443" --set "nginx.service.nodePorts[0].listenerPort=443" --wait
 	@echo "==> Creating default Gateway with TLS..."
 	kubectl apply -f manifests/default-gateway.yaml
 	@echo "==> Installing metrics-server..."
 	helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update
-	helm upgrade --install metrics-server metrics-server/metrics-server --namespace kube-system --set args[0]=--kubelet-insecure-tls --wait
+	helm upgrade --install metrics-server metrics-server/metrics-server --version $(METRICS_SERVER_VERSION) --namespace kube-system --set args[0]=--kubelet-insecure-tls --wait
 	@echo "==> Installing Prometheus stack (Prometheus, Grafana, Alertmanager)..."
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
-	helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack --namespace monitoring --create-namespace --wait
+	helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack --version $(PROM_STACK_VERSION) --namespace monitoring --create-namespace --wait
 	kubectl apply -f manifests/grafana-httproute.yaml
 	kubectl apply -f manifests/prometheus-httproute.yaml
 	kubectl apply -f manifests/alertmanager-httproute.yaml
